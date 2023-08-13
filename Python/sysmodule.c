@@ -714,6 +714,31 @@ finally:
     return ret;
 }
 
+/* Helper for sys_displayhook */
+static PyObject *
+display_object_and_newline(PyThreadState *tstate, PyObject *o, PyObject *outf)
+{
+    if (PyFile_WriteObject(o, outf, 0) != 0) {
+        if (_PyErr_ExceptionMatches(tstate, PyExc_UnicodeEncodeError)) {
+            int err;
+            /* repr(o) is not encodable to sys.stdout.encoding with
+             * sys.stdout.errors error handler (which is probably 'strict') */
+            _PyErr_Clear(tstate);
+            err = sys_displayhook_unencodable(outf, o);
+            if (err) {
+                return NULL;
+            }
+        }
+        else {
+            return NULL;
+        }
+    }
+    _Py_DECLARE_STR(newline, "\n");
+    if (PyFile_WriteObject(&_Py_STR(newline), outf, Py_PRINT_RAW) != 0)
+        return NULL;
+    Py_RETURN_NONE;
+}
+
 /*[clinic input]
 sys.displayhook
 
@@ -754,25 +779,25 @@ sys_displayhook(PyObject *module, PyObject *o)
         _PyErr_SetString(tstate, PyExc_RuntimeError, "lost sys.stdout");
         return NULL;
     }
-    if (PyFile_WriteObject(o, outf, 0) != 0) {
-        if (_PyErr_ExceptionMatches(tstate, PyExc_UnicodeEncodeError)) {
-            int err;
-            /* repr(o) is not encodable to sys.stdout.encoding with
-             * sys.stdout.errors error handler (which is probably 'strict') */
-            _PyErr_Clear(tstate);
-            err = sys_displayhook_unencodable(outf, o);
-            if (err) {
+
+    if (PyIter_Check(o)) {
+        // Object is an iterator
+        // Print each item rather than the object itself
+        PyObject *item;
+        while ((item = PyIter_Next(o))) {
+            if (!display_object_and_newline(tstate, item, outf)) {
+                Py_DECREF(item);
                 return NULL;
             }
-        }
-        else {
-            return NULL;
+            Py_DECREF(item);
         }
     }
-    if (PyFile_WriteObject(_Py_LATIN1_CHR('\n'), outf, Py_PRINT_RAW) != 0)
+    else if (!display_object_and_newline(tstate, o, outf))
         return NULL;
+
     if (PyObject_SetAttr(builtins, _Py_LATIN1_CHR('_'), o) != 0)
         return NULL;
+
     Py_RETURN_NONE;
 }
 
